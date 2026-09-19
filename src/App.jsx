@@ -10,7 +10,7 @@ import html2pdf from 'html2pdf.js';
 
 // --- FIREBASE IMPORTS ---
 import { initializeApp } from "firebase/app";
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "firebase/auth";
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "firebase/auth";
 import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, deleteDoc, getDocs } from "firebase/firestore";
 
 const firebaseConfig = {
@@ -293,21 +293,30 @@ const getDayIndicator = () => {
 
 function StaffManagementModal({ onClose, staffUsers, db, allSubFolders, displayMainFolders }) {
   const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [selectedFolders, setSelectedFolders] = useState([]);
   const [editingStaffId, setEditingStaffId] = useState(null);
   
   const handleAddStaff = async (e) => {
     e.preventDefault();
-    if (!username || !password) return;
+    if (!username || !email || (!password && !editingStaffId)) return;
     const staffData = {
       username: username.trim(),
-      password: password,
+      email: email.trim(),
       role: 'staff',
       assignedFolderIds: selectedFolders,
       updatedAt: new Date().toISOString()
     };
     try {
+      if (!editingStaffId) {
+        const secondaryAppName = "SecondaryApp_" + Date.now();
+        const secondaryApp = initializeApp(firebaseConfig, secondaryAppName);
+        const secondaryAuth = getAuth(secondaryApp);
+        await createUserWithEmailAndPassword(secondaryAuth, email.trim(), password);
+        await signOut(secondaryAuth);
+      }
+
       if (editingStaffId) {
         await updateDoc(doc(db, 'artifacts', CANVAS_APP_ID, 'public', 'data', 'staff_users', editingStaffId), staffData);
       } else {
@@ -318,17 +327,18 @@ function StaffManagementModal({ onClose, staffUsers, db, allSubFolders, displayM
       resetForm();
     } catch (e) {
       console.error(e);
-      alert("Failed to save staff");
+      alert("Failed to save staff: " + (e.message || "Unknown error"));
     }
   };
 
   const resetForm = () => {
-    setUsername(''); setPassword(''); setSelectedFolders([]); setEditingStaffId(null);
+    setUsername(''); setEmail(''); setPassword(''); setSelectedFolders([]); setEditingStaffId(null);
   };
 
   const startEdit = (staff) => {
     setUsername(staff.username);
-    setPassword(staff.password);
+    setEmail(staff.email || '');
+    setPassword(''); // don't load password since we can't edit it easily in firebase from frontend without re-auth
     setSelectedFolders(staff.assignedFolderIds || []);
     setEditingStaffId(staff.id);
   };
@@ -359,8 +369,12 @@ function StaffManagementModal({ onClose, staffUsers, db, allSubFolders, displayM
                 <input type="text" value={username} onChange={e => setUsername(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none" required />
               </div>
               <div>
-                <label className="block text-sm font-semibold mb-1 text-slate-700">Password</label>
-                <input type="text" value={password} onChange={e => setPassword(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none" required />
+                <label className="block text-sm font-semibold mb-1 text-slate-700">Email Address</label>
+                <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none" required />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold mb-1 text-slate-700">Password {editingStaffId && '(Leave blank to keep unchanged in Firebase)'}</label>
+                <input type="text" value={password} onChange={e => setPassword(e.target.value)} className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none" required={!editingStaffId} />
               </div>
               <div>
                 <label className="block text-sm font-semibold mb-2 text-slate-700">Assign Folders</label>
@@ -401,7 +415,7 @@ function StaffManagementModal({ onClose, staffUsers, db, allSubFolders, displayM
                     <h4 className="font-bold text-slate-800 flex items-center gap-2">
                       <User className="w-4 h-4 text-indigo-500"/> {staff.username}
                     </h4>
-                    <p className="text-xs text-slate-500 mt-1 font-mono bg-slate-100 inline-block px-2 py-0.5 rounded">Pass: {staff.password}</p>
+                    <p className="text-xs text-slate-500 mt-1 font-mono bg-slate-100 inline-block px-2 py-0.5 rounded">{staff.email}</p>
                     <div className="mt-3 flex flex-wrap gap-1.5">
                       {staff.assignedFolderIds?.map(fid => {
                         const folder = displayMainFolders.find(m => m.id === fid) || allSubFolders.find(s => s.id === fid);
@@ -431,7 +445,7 @@ function LoginScreen({ onLogin, staffUsers, authError, allUpdates }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
-  const adminUser = { username: 'MA Razak Master MLA', role: 'admin', id: 'admin', password: 'Razak@2026' };
+  const adminUser = { username: 'MA Razak Master MLA', email: 'marazakmasterclt@gmail.com', role: 'admin', id: 'admin' };
   const allUsers = [adminUser, ...staffUsers];
 
   const lastSeen = parseInt(localStorage.getItem('admin_last_seen_notifications') || '0', 10);
@@ -442,14 +456,17 @@ function LoginScreen({ onLogin, staffUsers, authError, allUpdates }) {
     return time > lastSeen && time > twoDaysAgo;
   }).length;
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     if (!selectedUser) return;
     
-    if (password === selectedUser.password) {
+    try {
+      setError('');
+      await signInWithEmailAndPassword(auth, selectedUser.email, password);
       onLogin(selectedUser);
-    } else {
-      setError('Invalid password.');
+    } catch (err) {
+      console.error(err);
+      setError('Invalid password or authentication failed.');
     }
   };
 
@@ -695,6 +712,22 @@ export default function App() {
     const unsubscribeAuth = onAuthStateChanged(auth, (usr) => setUser(usr ? usr : null));
     return () => unsubscribeAuth();
   }, []);
+
+  useEffect(() => {
+    if (user && user.email) {
+      if (user.email === 'marazakmasterclt@gmail.com') {
+        const adminUser = { username: 'MA Razak Master MLA', email: 'marazakmasterclt@gmail.com', role: 'admin', id: 'admin' };
+        setLoggedInUser(adminUser);
+      } else if (staffUsers.length > 0) {
+        const staffMatch = staffUsers.find(s => s.email === user.email);
+        if (staffMatch) {
+          setLoggedInUser(staffMatch);
+        }
+      }
+    } else if (!user) {
+      setLoggedInUser(null);
+    }
+  }, [user, staffUsers]);
 
   useEffect(() => {
     if (!user || authError) return;
@@ -1063,7 +1096,7 @@ export default function App() {
                 <Settings className="w-5 h-5 sm:w-6 sm:h-6" />
               </button>
             )}
-            <button onClick={() => setLoggedInUser(null)} className="p-2 bg-slate-100 hover:bg-red-100 text-slate-700 hover:text-red-600 rounded-full transition-colors relative" title="Log Out">
+            <button onClick={() => { setLoggedInUser(null); signOut(auth).then(() => signInAnonymously(auth)); }} className="p-2 bg-slate-100 hover:bg-red-100 text-slate-700 hover:text-red-600 rounded-full transition-colors relative" title="Log Out">
               <LogOut className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
             {isSettingsOpen && (
