@@ -1,0 +1,21 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 1. Allow anonymous users to ONLY read the staff list (needed for the Login screen boxes)
+    match /artifacts/{appId}/public/data/staff_users/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.token.email != null;
+    }
+    
+    // 2. Lock down EVERYTHING else. Only users logged in with a real Email/Password can read or write.
+    match /artifacts/{appId}/public/data/{collectionName}/{documentId} {
+      allow read, write: if request.auth != null && request.auth.token.email != null && collectionName != 'staff_users';
+    }
+    
+    // Fallback block
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
