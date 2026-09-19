@@ -11,7 +11,7 @@ import html2pdf from 'html2pdf.js';
 // --- FIREBASE IMPORTS ---
 import { initializeApp } from "firebase/app";
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from "firebase/auth";
-import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, deleteDoc, getDocs } from "firebase/firestore";
+import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, deleteDoc, getDocs, getDoc } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBc6U5seFvyHU_chuU6ME613TvBy-0MCF8",
@@ -33,19 +33,64 @@ try {
 
 const CANVAS_APP_ID = typeof __app_id !== 'undefined' ? __app_id : 'kgm-tracker-default';
 
-// --- CLOUDINARY UPLOAD FUNCTION ---
-const uploadToCloudinary = async (fileData, resourceType = 'auto') => {
-  const cloudName = 'davoje7p5'; 
-  const uploadPreset = 'tanur_preset'; 
-  const url = `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`;
-  const formData = new FormData();
-  formData.append('file', fileData);
-  formData.append('upload_preset', uploadPreset);
+// --- LOCAL SERVER UPLOAD FUNCTION ---
+const sharedFirebaseConfig = {
+  apiKey: "AIzaSyDlWgaEm8v3k0tmapwa9Q4Fbx-D0_YXD_A",
+  authDomain: "ma-razak-master-office.firebaseapp.com",
+  projectId: "ma-razak-master-office",
+  storageBucket: "ma-razak-master-office.firebasestorage.app",
+  messagingSenderId: "743153965338",
+  appId: "1:743153965338:web:5212b3ab18dc57376a74a3"
+};
 
-  const response = await fetch(url, { method: 'POST', body: formData });
-  if (!response.ok) throw new Error('Upload to Cloudinary failed');
-  const data = await response.json();
-  return data.secure_url; 
+let officeApp, officeDb, officeAuth;
+try {
+  officeApp = initializeApp(sharedFirebaseConfig, "OfficeApp");
+  officeDb = getFirestore(officeApp);
+  officeAuth = getAuth(officeApp);
+} catch (e) {
+  console.error("Secondary Firebase init failed:", e);
+}
+
+const uploadFileToServer = async (fileData, name, resourceType = 'auto') => {
+  let localServerUrl = null;
+  try {
+    try { await signInAnonymously(officeAuth); } catch(e){} // Try auth if needed
+    const docSnap = await getDoc(doc(officeDb, 'globals', 'settings'));
+    if (docSnap.exists()) {
+      localServerUrl = docSnap.data().localServerUrl;
+    }
+  } catch (e) {
+    console.error("Failed to fetch localServerUrl:", e);
+  }
+
+  if (!localServerUrl) {
+    throw new Error("File saving server is not connected. (Error Code: SERVER_OFFLINE)");
+  }
+
+  // Convert base64 data to blob
+  const res = await fetch(fileData);
+  const blob = await res.blob();
+
+  const formData = new FormData();
+  formData.append('file', blob, name);
+
+  let response;
+  try {
+    response = await fetch(`${localServerUrl}/upload`, { method: 'POST', body: formData });
+  } catch (e) {
+    throw new Error("File saving server is not connected. (Error Code: SERVER_OFFLINE)");
+  }
+  
+  if (!response.ok) throw new Error("File saving server is not connected. (Error Code: SERVER_OFFLINE)");
+  
+  const data = await response.text();
+  try {
+    const json = JSON.parse(data);
+    return json.url || json.fileUrl || json.secure_url || json;
+  } catch (e) {
+    return data; 
+  }
 };
 
 const ICON_MAP = {
@@ -1917,8 +1962,8 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
       if (user && !authError) {
         if (attachments.length > 0) {
           finalAttachments = await Promise.all(attachments.map(att => 
-            uploadToCloudinary(att.data, att.type === 'pdf' ? 'raw' : 'image').then(url => ({ type: att.type, url, name: att.name }))
-            .catch(() => ({ type: att.type, url: att.data, name: att.name }))
+            uploadFileToServer(att.data, att.name, att.type === 'pdf' ? 'raw' : 'image').then(url => ({ type: att.type, url, name: att.name }))
+            // We removed the catch fallback, so the error will propagate out!
           ));
         }
         const newUpdate = { id: updateId, projectId: project.id, text: updateText, attachments: finalAttachments, timestamp: new Date().toISOString(), isWeeklyUpdate: needsWeeklyUpdate };
@@ -1930,16 +1975,20 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
         ]);
       } else throw new Error("Fallback local");
     } catch (err) {
-      const newUpdate = { id: updateId, projectId: project.id, text: updateText, attachments: attachments.map(att => ({ type: att.type, url: att.data, name: att.name })), timestamp: new Date().toISOString(), isWeeklyUpdate: needsWeeklyUpdate };
-      setLocalUpdates(prev => [newUpdate, ...prev]);
-      setAllProjects(prev => prev.map(p => {
-        if (p.id === project.id) {
-          const proj = { ...p, updateCount: (p.updateCount || 0) + 1 };
-          if (needsWeeklyUpdate) proj.lastWeeklyUpdate = new Date().toISOString();
-          return proj;
-        }
-        return p;
-      }));
+      if (err.message && err.message.includes('SERVER_OFFLINE')) {
+        alert(err.message);
+      } else {
+        const newUpdate = { id: updateId, projectId: project.id, text: updateText, attachments: attachments.map(att => ({ type: att.type, url: att.data, name: att.name })), timestamp: new Date().toISOString(), isWeeklyUpdate: needsWeeklyUpdate };
+        setLocalUpdates(prev => [newUpdate, ...prev]);
+        setAllProjects(prev => prev.map(p => {
+          if (p.id === project.id) {
+            const proj = { ...p, updateCount: (p.updateCount || 0) + 1 };
+            if (needsWeeklyUpdate) proj.lastWeeklyUpdate = new Date().toISOString();
+            return proj;
+          }
+          return p;
+        }));
+      }
     } finally {
       setUpdateText(''); setAttachments([]); isSavingRef.current = false; setIsUploading(false);
     }
@@ -1977,7 +2026,7 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
           if (editAttachments.length > 0) {
             finalAttachments = await Promise.all(editAttachments.map(att => {
               if (att.isExisting) return Promise.resolve({ type: att.type, url: att.url, name: att.name });
-              return uploadToCloudinary(att.data, att.type === 'pdf' ? 'raw' : 'image').then(url => ({ type: att.type, url, name: att.name })).catch(() => ({ type: att.type, url: att.data, name: att.name }));
+              return uploadFileToServer(att.data, att.name, att.type === 'pdf' ? 'raw' : 'image').then(url => ({ type: att.type, url, name: att.name }));
             }));
           }
           const newUpdate = { id: updateId, projectId: project.id, text: editUpdateText, attachments: finalAttachments, timestamp: missedEntry ? missedEntry.timestamp : new Date().toISOString(), isWeeklyUpdate: true, createdAt: new Date().toISOString() };
@@ -1987,7 +2036,14 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
           const newUpdate = { id: updateId, projectId: project.id, text: editUpdateText, attachments: finalAttachments, timestamp: missedEntry ? missedEntry.timestamp : new Date().toISOString(), isWeeklyUpdate: true };
           setLocalUpdates(prev => [newUpdate, ...prev]);
         }
-      } catch (err) { console.error(err); } finally { setIsEditUploading(false); setEditingUpdateId(null); setEditUpdateText(''); setEditAttachments([]); }
+        }
+      } catch (err) { 
+        if (err.message && err.message.includes('SERVER_OFFLINE')) {
+          alert(err.message);
+        } else {
+          console.error(err);
+        }
+      } finally { setIsEditUploading(false); setEditingUpdateId(null); setEditUpdateText(''); setEditAttachments([]); }
       return;
     }
     
@@ -1996,7 +2052,7 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
       if (user && !authError) {
         finalAttachments = await Promise.all(editAttachments.map(att => {
           if (att.isExisting) return Promise.resolve({ type: att.type, url: att.url, name: att.name });
-          return uploadToCloudinary(att.data, att.type === 'pdf' ? 'raw' : 'image').then(url => ({ type: att.type, url, name: att.name })).catch(() => ({ type: att.type, url: att.data, name: att.name }));
+          return uploadFileToServer(att.data, att.name, att.type === 'pdf' ? 'raw' : 'image').then(url => ({ type: att.type, url, name: att.name }));
         }));
         await updateDoc(doc(db, 'artifacts', CANVAS_APP_ID, 'public', 'data', 'project_updates', editingUpdateId), { text: editUpdateText, attachments: finalAttachments, images: [] });
       } else {
