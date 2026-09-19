@@ -1935,10 +1935,9 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
     for (const file of filesArray) {
       try {
         if (file.type === 'application/pdf') {
-          if (file.size > 2097152) { errorDetected = `PDF too large: ${file.name}`; continue; }
           const b64 = await fileToBase64(file); newFiles.push({ type: 'pdf', data: b64, name: file.name, isExisting: false });
         } else if (file.type.startsWith('image/')) {
-          const b64 = await compressImage(file); newFiles.push({ type: 'image', data: b64, name: file.name, isExisting: false });
+          const b64 = await fileToBase64(file); newFiles.push({ type: 'image', data: b64, name: file.name, isExisting: false });
         } else { errorDetected = `Unsupported: ${file.name}`; }
       } catch (e) { console.error(e); }
     }
