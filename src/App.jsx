@@ -105,7 +105,7 @@ const uploadFileToServer = async (file, name, projectId) => {
   
   const data = await response.json();
   return {
-    fileId: data.fileId,
+    fileId: data.id,
     originalName: data.originalName || name,
     mimeType: data.mimeType || file.type,
     size: data.size || file.size,
