@@ -110,7 +110,7 @@ const SecureFileItem = ({ att, onExpandImage }) => {
          let localServerUrl = null;
          try { const docSnap = await getDoc(doc(officeDb, 'globals', 'settings')); if (docSnap.exists()) localServerUrl = docSnap.data().localServerUrl; } catch(err){}
          if (!localServerUrl) throw new Error("Server offline");
-         const res = await fetch(`${localServerUrl}/download/${att.fileId}`, { headers: { 'Authorization': `Bearer ${token}` } });
+         const res = await fetch(`${localServerUrl}/api/files/${att.fileId}`, { headers: { 'Authorization': `Bearer ${token}` } });
          if (!res.ok) throw new Error("Download failed");
          const blob = await res.blob();
          const blobUrl = URL.createObjectURL(blob);
@@ -143,7 +143,7 @@ const SecureImageViewer = ({ att, onClose }) => {
          const docSnap = await getDoc(doc(officeDb, 'globals', 'settings'));
          if (docSnap.exists()) localServerUrl = docSnap.data().localServerUrl;
          if (!localServerUrl) throw new Error("Server offline");
-         const res = await fetch(`${localServerUrl}/view/${att.fileId}`, { headers: { 'Authorization': `Bearer ${token}` } });
+         const res = await fetch(`${localServerUrl}/api/files/${att.fileId}`, { headers: { 'Authorization': `Bearer ${token}` } });
          if (!res.ok) throw new Error("Image load failed");
          const blob = await res.blob();
          if (active) setBlobUrl(URL.createObjectURL(blob));
