@@ -101,7 +101,10 @@ const uploadFileToServer = async (file, name, projectId) => {
     throw new Error("File saving server is not connected. (Error Code: SERVER_OFFLINE)");
   }
   
-  if (!response.ok) throw new Error("File saving server is not connected. (Error Code: SERVER_OFFLINE)");
+  if (!response.ok) {
+    if (response.status === 403) throw new Error("Authorization failed: User document missing or disabled.");
+    throw new Error("File saving server is not connected. (Error Code: SERVER_OFFLINE)");
+  }
   
   const data = await response.json();
   return {
@@ -865,15 +868,16 @@ export default function App() {
 
   useEffect(() => {
     if (user && user.email) {
-      if (user.email === 'marazakmasterclt@gmail.com') {
-        const adminUser = { username: 'MA Razak Master MLA', email: 'marazakmasterclt@gmail.com', role: 'admin', assignedFolderIds: [] };
+      if (user.email.toLowerCase() === 'marazakmasterclt@gmail.com') {
+        const adminUser = { username: 'MA Razak Master MLA', email: user.email, role: 'admin', assignedFolderIds: [] };
         
         const checkAndCreateAdmin = async () => {
           try {
             const adminDocRef = doc(db, 'artifacts', CANVAS_APP_ID, 'public', 'data', 'staff_users', user.uid);
             const snap = await getDoc(adminDocRef);
             if (!snap.exists()) {
-              await setDoc(adminDocRef, { ...adminUser, uid: user.uid, createdAt: new Date().toISOString() });
+              const now = new Date().toISOString();
+              await setDoc(adminDocRef, { ...adminUser, uid: user.uid, createdAt: now, updatedAt: now });
             }
           } catch(e) { console.error("Admin sync error:", e); }
         };
