@@ -2141,7 +2141,6 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
           const newUpdate = { id: updateId, projectId: project.id, text: editUpdateText, attachments: finalAttachments, timestamp: missedEntry ? missedEntry.timestamp : new Date().toISOString(), isWeeklyUpdate: true };
           setLocalUpdates(prev => [newUpdate, ...prev]);
         }
-        }
       } catch (err) { 
         if (err.message && err.message.includes('SERVER_OFFLINE')) {
           alert(err.message);
