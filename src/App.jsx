@@ -52,23 +52,37 @@ try {
   console.error("Secondary Firebase init failed:", e);
 }
 
+const getLocalServerUrl = async () => {
+  if (!officeAuth.currentUser) {
+    try {
+      await signInAnonymously(officeAuth);
+    } catch (e) {
+      console.error("Failed to authenticate anonymously with office server:", e);
+      return null;
+    }
+  }
+  
+  try {
+    const docRef = doc(officeDb, 'artifacts', 'ma-razak-master-office', 'public', 'data', 'globals', 'settings');
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return docSnap.data().localServerUrl;
+    }
+    console.error("Local server URL setting document not found");
+  } catch (e) {
+    console.error("Firestore read failed for server URL:", e);
+  }
+  return null;
+};
+
 const uploadFileToServer = async (file, name, projectId) => {
-  let localServerUrl = null;
   let token = null;
 
   if (auth.currentUser) {
     try { token = await auth.currentUser.getIdToken(); } catch (e) { throw new Error("User authentication failed."); }
   } else { throw new Error("Must be logged in to upload files."); }
 
-  try {
-    try { await signInAnonymously(officeAuth); } catch(e){}
-    const docSnap = await getDoc(doc(officeDb, 'globals', 'settings'));
-    if (docSnap.exists()) {
-      localServerUrl = docSnap.data().localServerUrl;
-    }
-  } catch (e) {
-    console.error("Failed to fetch localServerUrl:", e);
-  }
+  const localServerUrl = await getLocalServerUrl();
 
   if (!localServerUrl) throw new Error("File saving server is not connected. (Error Code: SERVER_OFFLINE)");
 
@@ -102,8 +116,7 @@ const uploadFileToServer = async (file, name, projectId) => {
 const SecureFileItem = ({ att, onExpandImage }) => {
   const getFileBlob = async () => {
      const token = await auth.currentUser.getIdToken();
-     let localServerUrl = null;
-     try { const docSnap = await getDoc(doc(officeDb, 'globals', 'settings')); if (docSnap.exists()) localServerUrl = docSnap.data().localServerUrl; } catch(err){}
+     const localServerUrl = await getLocalServerUrl();
      if (!localServerUrl) throw new Error("Server offline");
      const res = await fetch(`${localServerUrl}/api/files/${att.fileId}`, { headers: { 'Authorization': `Bearer ${token}` } });
      if (!res.ok) throw new Error("Download failed");
@@ -162,9 +175,7 @@ const SecureImageViewer = ({ att, onClose }) => {
          if (att.preview) { setBlobUrl(att.preview); return; } // for local unsaved preview
          if (!att.fileId) { setError("No file ID"); return; }
          const token = await auth.currentUser.getIdToken();
-         let localServerUrl = null;
-         const docSnap = await getDoc(doc(officeDb, 'globals', 'settings'));
-         if (docSnap.exists()) localServerUrl = docSnap.data().localServerUrl;
+         const localServerUrl = await getLocalServerUrl();
          if (!localServerUrl) throw new Error("Server offline");
          const res = await fetch(`${localServerUrl}/api/files/${att.fileId}`, { headers: { 'Authorization': `Bearer ${token}` } });
          if (!res.ok) throw new Error("Image load failed");
@@ -585,7 +596,7 @@ function LoginScreen({ onLogin, staffUsers, authError, allUpdates }) {
   const [error, setError] = useState('');
 
   const adminUser = { username: 'MA Razak Master MLA', email: 'marazakmasterclt@gmail.com', role: 'admin', id: 'admin' };
-  const allUsers = [adminUser, ...staffUsers];
+  const allUsers = [adminUser, ...staffUsers.filter(s => s.email.toLowerCase() !== adminUser.email.toLowerCase())];
 
   const lastSeen = parseInt(localStorage.getItem('admin_last_seen_notifications') || '0', 10);
   const twoDaysAgo = Date.now() - 48 * 60 * 60 * 1000;
@@ -2195,8 +2206,7 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
           // Physically delete attachments from the shared file server
           if (update.attachments && update.attachments.length > 0) {
              const token = await auth.currentUser.getIdToken();
-             let localServerUrl = null;
-             try { const docSnap = await getDoc(doc(officeDb, 'globals', 'settings')); if (docSnap.exists()) localServerUrl = docSnap.data().localServerUrl; } catch(e){}
+             const localServerUrl = await getLocalServerUrl();
              
              if (localServerUrl) {
                await Promise.all(update.attachments.map(async (att) => {
