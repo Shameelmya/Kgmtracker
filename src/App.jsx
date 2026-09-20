@@ -74,7 +74,7 @@ const uploadFileToServer = async (file, name, projectId) => {
 
   const formData = new FormData();
   formData.append('file', file, name);
-  if (projectId) formData.append('sourceProject', projectId);
+  formData.append('sourceProject', 'kgm');
 
   let response;
   try {
@@ -100,31 +100,54 @@ const uploadFileToServer = async (file, name, projectId) => {
 };
 
 const SecureFileItem = ({ att, onExpandImage }) => {
+  const getFileBlob = async () => {
+     const token = await auth.currentUser.getIdToken();
+     let localServerUrl = null;
+     try { const docSnap = await getDoc(doc(officeDb, 'globals', 'settings')); if (docSnap.exists()) localServerUrl = docSnap.data().localServerUrl; } catch(err){}
+     if (!localServerUrl) throw new Error("Server offline");
+     const res = await fetch(`${localServerUrl}/api/files/${att.fileId}`, { headers: { 'Authorization': `Bearer ${token}` } });
+     if (!res.ok) throw new Error("Download failed");
+     const rawBlob = await res.blob();
+     return new Blob([rawBlob], { type: att.mimeType || 'application/pdf' });
+  };
+
   const handleView = async (e) => {
     e.stopPropagation();
     if (att.mimeType?.startsWith('image/') || att.type === 'image') {
        onExpandImage(att);
     } else {
        try {
-         const token = await auth.currentUser.getIdToken();
-         let localServerUrl = null;
-         try { const docSnap = await getDoc(doc(officeDb, 'globals', 'settings')); if (docSnap.exists()) localServerUrl = docSnap.data().localServerUrl; } catch(err){}
-         if (!localServerUrl) throw new Error("Server offline");
-         const res = await fetch(`${localServerUrl}/api/files/${att.fileId}`, { headers: { 'Authorization': `Bearer ${token}` } });
-         if (!res.ok) throw new Error("Download failed");
-         const blob = await res.blob();
+         const blob = await getFileBlob();
          const blobUrl = URL.createObjectURL(blob);
-         const a = document.createElement('a'); a.href = blobUrl; a.download = att.originalName || att.name || 'file'; a.click();
-         setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+         window.open(blobUrl, '_blank');
+         // We do not revoke immediately to allow new tab to load it
+         setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
        } catch (err) { alert(err.message); }
     }
   };
 
+  const handleDownload = async (e) => {
+    e.stopPropagation();
+    try {
+      const blob = await getFileBlob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = blobUrl; a.download = att.originalName || att.name || 'file'; a.click();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    } catch (err) { alert(err.message); }
+  };
+
   return (
-    <button onClick={handleView} type="button" className="flex items-center gap-1 bg-slate-100 text-slate-700 text-xs px-2 py-1 rounded shadow-sm hover:bg-slate-200 border border-slate-200">
-      {(att.mimeType?.startsWith('image/') || att.type === 'image') ? <ImageIcon className="w-3 h-3"/> : <FileText className="w-3 h-3"/>} 
-      <span className="truncate max-w-[120px] font-medium">{att.originalName || att.name || 'File'}</span>
-    </button>
+    <div className="flex items-center gap-0 bg-slate-100 text-slate-700 text-xs rounded shadow-sm border border-slate-200 overflow-hidden">
+      <button onClick={handleView} type="button" className="flex items-center gap-1 px-2 py-1 hover:bg-slate-200">
+        {(att.mimeType?.startsWith('image/') || att.type === 'image') ? <ImageIcon className="w-3 h-3"/> : <FileText className="w-3 h-3"/>} 
+        <span className="truncate max-w-[120px] font-medium">{att.originalName || att.name || 'File'}</span>
+      </button>
+      {!att.mimeType?.startsWith('image/') && att.type !== 'image' && (
+        <button onClick={handleDownload} type="button" className="px-2 py-1 border-l border-slate-200 hover:bg-slate-200 text-slate-500 hover:text-slate-700" title="Download">
+          <Download className="w-3 h-3"/>
+        </button>
+      )}
+    </div>
   );
 };
 
