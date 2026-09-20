@@ -52,10 +52,16 @@ try {
   console.error("Secondary Firebase init failed:", e);
 }
 
-const uploadFileToServer = async (fileData, name, resourceType = 'auto') => {
+const uploadFileToServer = async (file, name, projectId) => {
   let localServerUrl = null;
+  let token = null;
+
+  if (auth.currentUser) {
+    try { token = await auth.currentUser.getIdToken(); } catch (e) { throw new Error("User authentication failed."); }
+  } else { throw new Error("Must be logged in to upload files."); }
+
   try {
-    try { await signInAnonymously(officeAuth); } catch(e){} // Try auth if needed
+    try { await signInAnonymously(officeAuth); } catch(e){}
     const docSnap = await getDoc(doc(officeDb, 'globals', 'settings'));
     if (docSnap.exists()) {
       localServerUrl = docSnap.data().localServerUrl;
@@ -64,33 +70,98 @@ const uploadFileToServer = async (fileData, name, resourceType = 'auto') => {
     console.error("Failed to fetch localServerUrl:", e);
   }
 
-  if (!localServerUrl) {
-    throw new Error("File saving server is not connected. (Error Code: SERVER_OFFLINE)");
-  }
-
-  // Convert base64 data to blob
-  const res = await fetch(fileData);
-  const blob = await res.blob();
+  if (!localServerUrl) throw new Error("File saving server is not connected. (Error Code: SERVER_OFFLINE)");
 
   const formData = new FormData();
-  formData.append('file', blob, name);
+  formData.append('file', file, name);
+  if (projectId) formData.append('sourceProject', projectId);
 
   let response;
   try {
-    response = await fetch(`${localServerUrl}/upload`, { method: 'POST', body: formData });
+    response = await fetch(`${localServerUrl}/upload`, { 
+      method: 'POST', 
+      body: formData,
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
   } catch (e) {
     throw new Error("File saving server is not connected. (Error Code: SERVER_OFFLINE)");
   }
   
   if (!response.ok) throw new Error("File saving server is not connected. (Error Code: SERVER_OFFLINE)");
   
-  const data = await response.text();
-  try {
-    const json = JSON.parse(data);
-    return json.url || json.fileUrl || json.secure_url || json;
-  } catch (e) {
-    return data; 
-  }
+  const data = await response.json();
+  return {
+    fileId: data.fileId,
+    originalName: data.originalName || name,
+    mimeType: data.mimeType || file.type,
+    size: data.size || file.size,
+    sourceProject: projectId
+  };
+};
+
+const SecureFileItem = ({ att, onExpandImage }) => {
+  const handleView = async (e) => {
+    e.stopPropagation();
+    if (att.mimeType?.startsWith('image/') || att.type === 'image') {
+       onExpandImage(att);
+    } else {
+       try {
+         const token = await auth.currentUser.getIdToken();
+         let localServerUrl = null;
+         try { const docSnap = await getDoc(doc(officeDb, 'globals', 'settings')); if (docSnap.exists()) localServerUrl = docSnap.data().localServerUrl; } catch(err){}
+         if (!localServerUrl) throw new Error("Server offline");
+         const res = await fetch(`${localServerUrl}/download/${att.fileId}`, { headers: { 'Authorization': `Bearer ${token}` } });
+         if (!res.ok) throw new Error("Download failed");
+         const blob = await res.blob();
+         const blobUrl = URL.createObjectURL(blob);
+         const a = document.createElement('a'); a.href = blobUrl; a.download = att.originalName || att.name || 'file'; a.click();
+         setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+       } catch (err) { alert(err.message); }
+    }
+  };
+
+  return (
+    <button onClick={handleView} type="button" className="flex items-center gap-1 bg-slate-100 text-slate-700 text-xs px-2 py-1 rounded shadow-sm hover:bg-slate-200 border border-slate-200">
+      {(att.mimeType?.startsWith('image/') || att.type === 'image') ? <ImageIcon className="w-3 h-3"/> : <FileText className="w-3 h-3"/>} 
+      <span className="truncate max-w-[120px] font-medium">{att.originalName || att.name || 'File'}</span>
+    </button>
+  );
+};
+
+const SecureImageViewer = ({ att, onClose }) => {
+  const [blobUrl, setBlobUrl] = useState(null);
+  const [error, setError] = useState(null);
+  
+  useEffect(() => {
+    let active = true;
+    const loadImg = async () => {
+       try {
+         if (att.preview) { setBlobUrl(att.preview); return; } // for local unsaved preview
+         if (!att.fileId) { setError("No file ID"); return; }
+         const token = await auth.currentUser.getIdToken();
+         let localServerUrl = null;
+         const docSnap = await getDoc(doc(officeDb, 'globals', 'settings'));
+         if (docSnap.exists()) localServerUrl = docSnap.data().localServerUrl;
+         if (!localServerUrl) throw new Error("Server offline");
+         const res = await fetch(`${localServerUrl}/view/${att.fileId}`, { headers: { 'Authorization': `Bearer ${token}` } });
+         if (!res.ok) throw new Error("Image load failed");
+         const blob = await res.blob();
+         if (active) setBlobUrl(URL.createObjectURL(blob));
+       } catch (err) { if (active) setError(err.message); }
+    };
+    loadImg();
+    return () => { active = false; if (blobUrl && !att.preview) URL.revokeObjectURL(blobUrl); };
+  }, [att]);
+
+  return (
+    <div className="fixed inset-0 z-[160] flex items-center justify-center p-4 bg-black/90" onClick={onClose}>
+      <button className="absolute top-4 right-4 text-white hover:text-red-400 p-2"><X className="w-8 h-8"/></button>
+      {error ? <div className="text-white bg-red-900/50 p-4 rounded-lg font-bold">{error}</div> :
+       !blobUrl ? <Loader2 className="w-12 h-12 animate-spin text-white" /> :
+       <img src={blobUrl} alt="Expanded" className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl" onClick={e => e.stopPropagation()}/>
+      }
+    </div>
+  );
 };
 
 const ICON_MAP = {
@@ -761,8 +832,20 @@ export default function App() {
   useEffect(() => {
     if (user && user.email) {
       if (user.email === 'marazakmasterclt@gmail.com') {
-        const adminUser = { username: 'MA Razak Master MLA', email: 'marazakmasterclt@gmail.com', role: 'admin', id: 'admin' };
-        setLoggedInUser(adminUser);
+        const adminUser = { username: 'MA Razak Master MLA', email: 'marazakmasterclt@gmail.com', role: 'admin', assignedFolderIds: [] };
+        
+        const checkAndCreateAdmin = async () => {
+          try {
+            const adminDocRef = doc(db, 'artifacts', CANVAS_APP_ID, 'public', 'data', 'staff_users', user.uid);
+            const snap = await getDoc(adminDocRef);
+            if (!snap.exists()) {
+              await setDoc(adminDocRef, { ...adminUser, uid: user.uid, createdAt: new Date().toISOString() });
+            }
+          } catch(e) { console.error("Admin sync error:", e); }
+        };
+        checkAndCreateAdmin();
+        
+        setLoggedInUser({ ...adminUser, id: user.uid });
       } else if (staffUsers.length > 0) {
         const staffMatch = staffUsers.find(s => s.email === user.email);
         if (staffMatch) {
@@ -1933,13 +2016,14 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
   const processFiles = async (filesArray) => {
     let newFiles = []; let errorDetected = null;
     for (const file of filesArray) {
-      try {
-        if (file.type === 'application/pdf') {
-          const b64 = await fileToBase64(file); newFiles.push({ type: 'pdf', data: b64, name: file.name, isExisting: false });
-        } else if (file.type.startsWith('image/')) {
-          const b64 = await fileToBase64(file); newFiles.push({ type: 'image', data: b64, name: file.name, isExisting: false });
-        } else { errorDetected = `Unsupported: ${file.name}`; }
-      } catch (e) { console.error(e); }
+      if (file.type === 'application/pdf') {
+        newFiles.push({ type: 'pdf', file: file, name: file.name, preview: null, isExisting: false });
+      } else if (file.type.startsWith('image/')) {
+        const previewUrl = URL.createObjectURL(file);
+        newFiles.push({ type: 'image', file: file, name: file.name, preview: previewUrl, isExisting: false });
+      } else { 
+        errorDetected = `Unsupported: ${file.name}`; 
+      }
     }
     return { newFiles, errorDetected };
   };
@@ -1961,8 +2045,7 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
       if (user && !authError) {
         if (attachments.length > 0) {
           finalAttachments = await Promise.all(attachments.map(att => 
-            uploadFileToServer(att.data, att.name, att.type === 'pdf' ? 'raw' : 'image').then(url => ({ type: att.type, url, name: att.name }))
-            // We removed the catch fallback, so the error will propagate out!
+            uploadFileToServer(att.file, att.name, project.id)
           ));
         }
         const newUpdate = { id: updateId, projectId: project.id, text: updateText, attachments: finalAttachments, timestamp: new Date().toISOString(), isWeeklyUpdate: needsWeeklyUpdate };
@@ -1977,7 +2060,7 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
       if (err.message && err.message.includes('SERVER_OFFLINE')) {
         alert(err.message);
       } else {
-        const newUpdate = { id: updateId, projectId: project.id, text: updateText, attachments: attachments.map(att => ({ type: att.type, url: att.data, name: att.name })), timestamp: new Date().toISOString(), isWeeklyUpdate: needsWeeklyUpdate };
+        const newUpdate = { id: updateId, projectId: project.id, text: updateText, attachments: attachments.map(att => ({ type: att.type, preview: att.preview, name: att.name })), timestamp: new Date().toISOString(), isWeeklyUpdate: needsWeeklyUpdate };
         setLocalUpdates(prev => [newUpdate, ...prev]);
         setAllProjects(prev => prev.map(p => {
           if (p.id === project.id) {
@@ -2024,14 +2107,14 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
         if (user && !authError) {
           if (editAttachments.length > 0) {
             finalAttachments = await Promise.all(editAttachments.map(att => {
-              if (att.isExisting) return Promise.resolve({ type: att.type, url: att.url, name: att.name });
-              return uploadFileToServer(att.data, att.name, att.type === 'pdf' ? 'raw' : 'image').then(url => ({ type: att.type, url, name: att.name }));
+              if (att.isExisting) return Promise.resolve(att);
+              return uploadFileToServer(att.file, att.name, project.id);
             }));
           }
           const newUpdate = { id: updateId, projectId: project.id, text: editUpdateText, attachments: finalAttachments, timestamp: missedEntry ? missedEntry.timestamp : new Date().toISOString(), isWeeklyUpdate: true, createdAt: new Date().toISOString() };
           await setDoc(doc(db, 'artifacts', CANVAS_APP_ID, 'public', 'data', 'project_updates', updateId), newUpdate);
         } else {
-          finalAttachments = editAttachments.map(att => att.isExisting ? att : { type: att.type, url: att.data, name: att.name });
+          finalAttachments = editAttachments.map(att => att.isExisting ? att : { type: att.type, preview: att.preview, name: att.name });
           const newUpdate = { id: updateId, projectId: project.id, text: editUpdateText, attachments: finalAttachments, timestamp: missedEntry ? missedEntry.timestamp : new Date().toISOString(), isWeeklyUpdate: true };
           setLocalUpdates(prev => [newUpdate, ...prev]);
         }
@@ -2050,12 +2133,12 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
       let finalAttachments = [];
       if (user && !authError) {
         finalAttachments = await Promise.all(editAttachments.map(att => {
-          if (att.isExisting) return Promise.resolve({ type: att.type, url: att.url, name: att.name });
-          return uploadFileToServer(att.data, att.name, att.type === 'pdf' ? 'raw' : 'image').then(url => ({ type: att.type, url, name: att.name }));
+          if (att.isExisting) return Promise.resolve(att);
+          return uploadFileToServer(att.file, att.name, project.id);
         }));
         await updateDoc(doc(db, 'artifacts', CANVAS_APP_ID, 'public', 'data', 'project_updates', editingUpdateId), { text: editUpdateText, attachments: finalAttachments, images: [] });
       } else {
-        finalAttachments = editAttachments.map(att => att.isExisting ? att : { type: att.type, url: att.data, name: att.name });
+        finalAttachments = editAttachments.map(att => att.isExisting ? att : { type: att.type, preview: att.preview, name: att.name });
         setLocalUpdates(prev => prev.map(u => u.id === editingUpdateId ? { ...u, text: editUpdateText, attachments: finalAttachments, images: [] } : u));
       }
     } catch (e) { console.error(e); } finally { setIsEditUploading(false); setEditingUpdateId(null); }
@@ -2084,14 +2167,29 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
 
   const handleDeleteUpdate = (update) => {
     setConfirmDialog({ title: "Delete Update", message: "Type 'delete' to confirm deletion of this update timeline event.", onConfirm: async () => {
-      setLocalUpdates(prev => prev.filter(u => u.id !== update.id));
-      setAllProjects(prev => prev.map(p => p.id === project.id ? { ...p, updateCount: Math.max(0, (p.updateCount || 0) - 1) } : p));
+      
       if (user && !authError) {
         try {
+          // Physically delete attachments from the shared file server
+          if (update.attachments && update.attachments.length > 0) {
+             const token = await auth.currentUser.getIdToken();
+             let localServerUrl = null;
+             try { const docSnap = await getDoc(doc(officeDb, 'globals', 'settings')); if (docSnap.exists()) localServerUrl = docSnap.data().localServerUrl; } catch(e){}
+             
+             if (localServerUrl) {
+               await Promise.all(update.attachments.map(async (att) => {
+                 if (att.fileId) {
+                   try { await fetch(`${localServerUrl}/delete/${att.fileId}`, { method: 'DELETE', headers: { 'Authorization': `Bearer ${token}` } }); } catch(err){ console.error(err); }
+                 }
+               }));
+             }
+          }
           await deleteDoc(doc(db, 'artifacts', CANVAS_APP_ID, 'public', 'data', 'project_updates', update.id));
           await updateDoc(doc(db, 'artifacts', CANVAS_APP_ID, 'public', 'data', 'projects', project.id), { updateCount: Math.max(0, (project.updateCount || 0) - 1) });
-        } catch (e) {}
+        } catch (e) { console.error("Deletion failed", e); }
       }
+      setLocalUpdates(prev => prev.filter(u => u.id !== update.id));
+      setAllProjects(prev => prev.map(p => p.id === project.id ? { ...p, updateCount: Math.max(0, (p.updateCount || 0) - 1) } : p));
     }});
   };
 
@@ -2144,7 +2242,7 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
                 <div className="mt-2 flex flex-wrap gap-2">
                   {attachments.map((f, i) => (
                     <div key={i} className="relative inline-block rounded overflow-hidden border">
-                      {f.type === 'pdf' ? <div className="h-10 w-10 bg-slate-100 flex items-center justify-center"><FileText className="w-5 text-red-500"/></div> : <img src={f.data} alt="preview" className="h-10 w-10 object-cover"/>}
+                      {f.type === 'pdf' ? <div className="h-10 w-10 bg-slate-100 flex items-center justify-center"><FileText className="w-5 text-red-500"/></div> : <img src={f.preview} alt="preview" className="h-10 w-10 object-cover"/>}
                       <button type="button" onClick={() => setAttachments(prev => prev.filter((_, idx) => idx !== i))} className="absolute top-0 right-0 bg-black/60 text-white p-0.5 rounded-bl hover:bg-red-500"><X className="w-3 h-3"/></button>
                     </div>
                   ))}
@@ -2197,11 +2295,9 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
                       <span className={`text-xs font-bold ${update.isWeeklyUpdate ? 'text-red-600' : 'text-slate-600'}`}>{formatDate(update.timestamp)}</span>
                     </div>
                     {update.text && <div className="text-sm text-slate-700 whitespace-pre-wrap">{update.text}</div>}
-                    <div className="mt-2 flex gap-2">
-                      {update.attachments?.map((att, i) => att.type === 'pdf' ? (
-                        <a key={i} href={att.url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 bg-red-50 text-red-700 text-xs px-2 py-1 rounded"><FileText className="w-3 h-3"/> {att.name || 'PDF'}</a>
-                      ) : (
-                        <img key={i} src={att.url} alt="img" className="w-10 h-10 object-cover rounded cursor-pointer" onClick={(e) => { e.stopPropagation(); setExpandedImage(att.url); }}/>
+                    <div className="mt-2 flex gap-2 flex-wrap">
+                      {update.attachments?.map((att, i) => (
+                        <SecureFileItem key={i} att={att} onExpandImage={setExpandedImage} />
                       ))}
                     </div>
                   </LongPressable>
@@ -2213,10 +2309,7 @@ function ProjectAccordion({ project, theme, index, user, authError, db, allSubFo
       )}
       
       {expandedImage && (
-        <div className="fixed inset-0 z-[160] flex items-center justify-center p-4 bg-black/90" onClick={() => setExpandedImage(null)}>
-          <button className="absolute top-4 right-4 text-white"><X className="w-6 h-6"/></button>
-          <img src={expandedImage} alt="Expanded" className="max-w-full max-h-[90vh] object-contain rounded-lg" onClick={e => e.stopPropagation()}/>
-        </div>
+        <SecureImageViewer att={expandedImage} onClose={() => setExpandedImage(null)} />
       )}
     </div>
   );
