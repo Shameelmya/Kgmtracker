@@ -1294,7 +1294,7 @@ export default function App() {
         </div>
 
         {/* Add Button */}
-        {(!loggedInUser || loggedInUser.role === 'admin') && (
+        {true && (
           <button 
             onClick={() => { setNewNameInput(''); !activeMainFolder ? setIsAddingMainFolderModalOpen(true) : setIsAddingCategoryModalOpen(true); }} 
             className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 text-slate-600 rounded-full shadow-sm hover:text-indigo-600 hover:border-indigo-200 hover:bg-indigo-50 hover:shadow-md transition-all text-xs sm:text-sm font-semibold mb-6 group"
@@ -1306,7 +1306,7 @@ export default function App() {
       </main>
 
       {/* Floating Quick Add Button */}
-      {(!loggedInUser || loggedInUser.role === 'admin') && (
+      {true && (
         <button
           onClick={() => setIsQuickAddModalOpen(true)}
           className="fixed bottom-6 right-6 z-40 bg-indigo-600 text-white p-4 sm:px-6 sm:py-4 rounded-full shadow-xl hover:bg-indigo-700 hover:scale-105 transition-all group flex items-center justify-center gap-2"
@@ -1798,7 +1798,7 @@ function ProjectModal({ body, allSubFolders, onClose, projects, onAddProject, us
             <button onClick={() => setShowContactsModal(true)} className="p-2 sm:p-2.5 bg-white/20 text-white hover:bg-white/30 rounded-full transition-transform hover:scale-105 shadow-md">
               <PhoneCall className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
-            {(!loggedInUser || loggedInUser.role === 'admin') && (
+            {true && (
               <button onClick={() => setIsAddingProject(!isAddingProject)} className="p-2 sm:p-2.5 bg-white text-slate-900 hover:bg-slate-100 rounded-full transition-transform hover:scale-105 shadow-md">
                 <Plus className={`w-5 h-5 sm:w-6 sm:h-6 transition-transform duration-300 ${isAddingProject ? 'rotate-45' : ''}`} />
               </button>
